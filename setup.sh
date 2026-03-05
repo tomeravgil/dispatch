@@ -1,7 +1,5 @@
 #!/bin/bash
 
-#!/bin/bash
-
 # Function to check and install dependencies
 install_dep() {
     if ! command -v $1 &> /dev/null; then
@@ -28,20 +26,25 @@ cmake ..
 make
 cd ..
 
-# 3. Add to PATH (Permanent for Bash/Zsh)
-BINARY_PATH=$(pwd)/build
-if [[ ":$PATH:" != *":$BINARY_PATH:"* ]]; then
-    echo "Adding $BINARY_PATH to PATH..."
+# 3. Install the executable
+INSTALL_DIR="$HOME/.local/bin"
+echo "Installing dispatch to $INSTALL_DIR..."
+mkdir -p "$INSTALL_DIR"
+cp build/dispatch "$INSTALL_DIR/"
+
+# 4. Add to PATH if necessary (Permanent for Bash/Zsh)
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    echo "Adding $INSTALL_DIR to PATH..."
     # Detect shell
     if [[ "$SHELL" == *"zsh"* ]]; then
-        echo "export PATH=\"\$PATH:$BINARY_PATH\"" >> ~/.zshrc
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.zshrc
         echo "Please run 'source ~/.zshrc' or restart terminal."
     else
-        echo "export PATH=\"\$PATH:$BINARY_PATH\"" >> ~/.bashrc
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bashrc
         echo "Please run 'source ~/.bashrc' or restart terminal."
     fi
 else
-    echo "dispatch is already in PATH."
+    echo "dispatch is ready to use!"
 fi
 
 echo "Setup complete! Try running: dispatch help"

@@ -7,6 +7,10 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <chrono>
+#include <sstream>
+#include <iomanip>
+#include <sys/wait.h>
 using namespace std;
 
 CommandProcessor::CommandProcessor(int argc, char* argv[]) {
@@ -37,6 +41,7 @@ void CommandProcessor::processCommand() {
         throw new invalid_argument("No Commands");
     }
 
+    auto startTime = chrono::steady_clock::now();
     FILE* pipe = popen(this->command.c_str(), "r");
 
     if (!pipe) {
@@ -48,11 +53,27 @@ void CommandProcessor::processCommand() {
             this->commandOutput += buffer;
         }
     } catch (exception e) {
-        pclose(pipe);
+        int status = pclose(pipe);
+        if (WIFEXITED(status)) {
+            this->exitCode = WEXITSTATUS(status);
+        } else {
+            this->exitCode = -1;
+        }
+        this->success = false;
         throw runtime_error(e.what());
     }
 
-    pclose(pipe);
+    int status = pclose(pipe);
+    auto endTime = chrono::steady_clock::now();
+    this->durationMs = chrono::duration<double, std::milli>(endTime - startTime).count();
+    
+    if (WIFEXITED(status)) {
+        this->exitCode = WEXITSTATUS(status);
+        this->success = (this->exitCode == 0);
+    } else {
+        this->exitCode = -1;
+        this->success = false;
+    }
 }
 
 string CommandProcessor::readFileOutputs() {
@@ -83,11 +104,18 @@ map<string, string> CommandProcessor::getFileToOutputMap() const {
     return this->fileToOutput;
 }
 
-map<string,pair<string,string>> CommandProcessor::getCommandPayloads(map<string,string> selectedWebhooks) const {
-    if (!this->commandOutput.empty()) {
+map<string,pair<string,string>> CommandProcessor::getCommandPayloads(map<string,string> selectedWebhooks) {
+    if (this->commandOutput.empty()) {
         cerr<<"command Output is empty"<<endl;
     }
-    string cleanedOutput = this->escapeForJSON(this->commandOutput);
+    
+    string payloadOutput = this->commandOutput;
+    if (payloadOutput.length() > 1800) {
+        this->fileToOutput["output.txt"] = this->commandOutput;
+        payloadOutput = payloadOutput.substr(0, 500) + "\n... [TRUNCATED - Full output attached as file]";
+    }
+    
+    string cleanedOutput = this->escapeForJSON(payloadOutput);
     map<string, pair<string, string>> commandPayloads;
     if (selectedWebhooks.empty()) {
         cerr<<"No Selected Webhooks. Select Webhooks using config commands. Use \"config help\" for more"<<endl;
@@ -96,11 +124,11 @@ map<string,pair<string,string>> CommandProcessor::getCommandPayloads(map<string,
         string payload;
         string payloadType;
         if (pair.second.find("discord") != string::npos) {
-            payload = this->createDiscordPayload(cleanedOutput);
+            payload = this->createDiscordPayload(cleanedOutput, this->success, this->exitCode, this->durationMs);
             payloadType = "discord";
         }
         else if (pair.second.find("slack") != string::npos) {
-            payload = this->createSlackPayload(cleanedOutput);
+            payload = this->createSlackPayload(cleanedOutput, this->success, this->exitCode, this->durationMs);
             payloadType = "slack";
         }
         else {
@@ -112,14 +140,36 @@ map<string,pair<string,string>> CommandProcessor::getCommandPayloads(map<string,
     return commandPayloads;
 }
 
-string CommandProcessor::createDiscordPayload(const string& rawOutput) {
-    std::string formatted = "**Dispatch Result:**\\n```bash\\n" + rawOutput + "```";
+string CommandProcessor::createDiscordPayload(const string& rawOutput, bool success, int exitCode, double durationMs) {
+    ostringstream ss;
+    if (durationMs >= 1000) {
+        ss << fixed << setprecision(2) << (durationMs / 1000.0) << "s";
+    } else {
+        ss << fixed << setprecision(2) << durationMs << "ms";
+    }
+    string timeString = ss.str();
+
+    string statusEmoji = success ? "✅" : "❌";
+    string statusText = success ? "Success" : "Failed (Code " + to_string(exitCode) + ")";
+
+    std::string formatted = "**Dispatch Result:** " + statusEmoji + " " + statusText + " | ⏱️ `" + timeString + "`\\n```bash\\n" + rawOutput + "```";
 
     return "{\"content\": \"" + formatted + "\"}";
 }
 
-string CommandProcessor::createSlackPayload(const string& rawOutput) {
-    std::string formatted = "*Dispatch Result:*\\n```" + rawOutput + "```";
+string CommandProcessor::createSlackPayload(const string& rawOutput, bool success, int exitCode, double durationMs) {
+    ostringstream ss;
+    if (durationMs >= 1000) {
+        ss << fixed << setprecision(2) << (durationMs / 1000.0) << "s";
+    } else {
+        ss << fixed << setprecision(2) << durationMs << "ms";
+    }
+    string timeString = ss.str();
+
+    string statusEmoji = success ? "✅" : "❌";
+    string statusText = success ? "Success" : "Failed (Code " + to_string(exitCode) + ")";
+
+    std::string formatted = "*Dispatch Result:* " + statusEmoji + " " + statusText + " | ⏱️ `" + timeString + "`\\n```" + rawOutput + "```";
 
     return "{\"text\": \"" + formatted + "\"}";
 }

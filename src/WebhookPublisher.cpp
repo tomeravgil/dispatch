@@ -10,6 +10,24 @@
 using namespace std;
 
 
+static string escapeJSON(const string& data) {
+    string buffer;
+    buffer.reserve(data.size());
+    for (char c : data) {
+        switch (c) {
+            case '"':  buffer += "\\\""; break;
+            case '\\': buffer += "\\\\"; break;
+            case '\b': buffer += "\\b";  break;
+            case '\f': buffer += "\\f";  break;
+            case '\n': buffer += "\\n";  break;
+            case '\r': buffer += "\\r";  break;
+            case '\t': buffer += "\\t";  break;
+            default:   buffer += c;
+        }
+    }
+    return buffer;
+}
+
 void WebhookPublisher::publishWebhook(const string &appType, const string &webhookUrl, const string &payload, const map<string, string>& files) {
     CURL* curl = curl_easy_init();
     if (!curl) return;
@@ -25,10 +43,18 @@ void WebhookPublisher::publishWebhook(const string &appType, const string &webho
         curl_mime_data(part, payload.c_str(), CURL_ZERO_TERMINATED);
 
         // 2. The File Parts
+        int fileIdx = 0;
         for (const auto& [path, content] : files) {
             part = curl_mime_addpart(mime);
-            curl_mime_name(part, "file"); // Key for the attachment
-            curl_mime_filedata(part, path.c_str());
+            string fieldName = "file" + to_string(fileIdx++);
+            curl_mime_name(part, fieldName.c_str()); 
+            
+            // Extract just the filename to be safe
+            size_t slashPos = path.find_last_of("/\\");
+            string safeFilename = (slashPos != string::npos) ? path.substr(slashPos + 1) : path;
+            
+            curl_mime_filename(part, safeFilename.c_str());
+            curl_mime_data(part, content.data(), content.size());
         }
 
         curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
@@ -46,9 +72,12 @@ void WebhookPublisher::publishWebhook(const string &appType, const string &webho
             finalPayload.pop_back(); // Remove closing }
             string fileAppend = "\\n\\n*Attached Files Content:*\\n";
             for (auto const& [path, content] : files) {
-                fileAppend += "File: " + path + "\\n```\\n" + content + "```\\n";
+                string safeContent = escapeJSON(content);
+                if (safeContent.length() > 2000) {
+                    safeContent = safeContent.substr(0, 2000) + "\\n... [FILE TRUNCATED DUE TO SLACK LIMITS]";
+                }
+                fileAppend += "File: " + path + "\\n```\\n" + safeContent + "```\\n";
             }
-            // Use your escapeForJSON logic here if content has quotes!
             finalPayload += ", \"text\": \"" + fileAppend + "\"}";
         }
 

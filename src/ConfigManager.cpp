@@ -25,8 +25,9 @@ ConfigManager::ConfigManager() {
 
         string value = line.substr(splitPos + 1);
         if (line[0] == '*') {
-            string key = line.substr(1, splitPos);
+            string key = line.substr(1, splitPos - 1);
             this->selectedWebhooks[key] = value;
+            this->webhooks[key] = value; // Needs to be added to webhooks too
             continue;
         }
         string key = line.substr(0, splitPos);
