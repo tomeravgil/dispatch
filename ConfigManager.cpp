@@ -5,15 +5,31 @@
 #include "ConfigManager.h"
 #include <iostream>
 #include <fstream>
+#include <utility>
 using namespace std;
 
 ConfigManager::ConfigManager() {
-    ifstream configFile(this->configFileLocation);
+    const char* homeDir = getenv("HOME");
+    string path;
+    if (homeDir) {
+        path = string(homeDir) + "/.dispatchconfig.txt";
+    } else {
+        path = ".dispatchconfig.txt"; // Fallback to current dir
+    }
+
+    ifstream configFile(path);
     string line;
     while (getline(configFile, line)) {
+
         int splitPos = line.find("=");
-        string key = line.substr(0, splitPos);
+
         string value = line.substr(splitPos + 1);
+        if (line[0] == '*') {
+            string key = line.substr(1, splitPos);
+            this->selectedWebhooks[key] = value;
+            continue;
+        }
+        string key = line.substr(0, splitPos);
         this->webhooks[key] = value;
 
         if (selectedWebhooks.empty()) {
@@ -22,8 +38,8 @@ ConfigManager::ConfigManager() {
     }
 }
 
-bool ConfigManager::addWebhook(string appName, string webhookUrl) {
-    if (this->webhooks.find(appName) != this->webhooks.end()) {
+bool ConfigManager::addWebhook(const string& appName, const string& webhookUrl) {
+    if (this->webhooks.contains(appName)) {
         cerr<<"webhook already exists"<<endl;
         return false;
     }
@@ -32,21 +48,25 @@ bool ConfigManager::addWebhook(string appName, string webhookUrl) {
     configFile<<appName<<"="<<webhookUrl<<endl;
     configFile.close();
 
+    if (!this->overwriteConfigFile()) {
+        cerr<<"Error writing to file"<<this->configFileLocation<<endl;
+    }
+
     return true;
 }
 
-bool ConfigManager::removeWebhook(string appName) {
-    if (this->webhooks.find(appName) == this->webhooks.end()) {
+bool ConfigManager::removeWebhook(const string& appName) {
+
+    if (!this->webhooks.contains(appName)) {
         cerr<<"webhook doesn't exist"<<endl;
         return false;
     }
+    string appNameValue = this->webhooks[appName];
     string toBeDeleted = appName + "=" + this->webhooks[appName];
-    this->temporaryModifiedWebhooks[appName] = this->webhooks[appName];
     this->webhooks.erase(appName);
 
     if (!this->overwriteConfigFile()) {
-        this->webhooks[appName] = this->temporaryModifiedWebhooks[appName];
-        this->temporaryModifiedWebhooks.erase(appName);
+        this->webhooks[appName] = appNameValue;
         return false;
     }
 
@@ -54,43 +74,126 @@ bool ConfigManager::removeWebhook(string appName) {
 }
 
 bool ConfigManager::overwriteConfigFile() const {
+    const char* homeDir = getenv("HOME");
+    string actualPath = homeDir ? (string(homeDir) + "/.dispatchconfig.txt") : ".dispatchconfig.txt";
+    string tempPath = actualPath + ".tmp";
+
     try {
-        ofstream outFile("temp.txt");
-        string line;
-
+        ofstream outFile(tempPath);
         for (const auto& webhook : this->webhooks) {
-            outFile<<webhook.first<<"="<<webhook.second<<endl;
+            if (this->selectedWebhooks.contains(webhook.first)) {
+                outFile << "*";
+            }
+            outFile << webhook.first << "=" << webhook.second << endl;
         }
-
         outFile.close();
 
-        remove(this->configFileLocation.c_str());
-        rename("temp.txt", this->configFileLocation.c_str());
+        // 1. Remove old file
+        remove(actualPath.c_str());
+        // 2. Move temp to actual
+        if (rename(tempPath.c_str(), actualPath.c_str()) != 0) {
+            cerr << "Rename failed!" << endl;
+            return false;
+        }
     }
     catch (exception& e) {
-        cerr<<"failed to save config file"<<endl;
+        cerr << "failed to save config file: " << e.what() << endl;
+        return false;
+    }
+    return true;
+}
+
+bool ConfigManager::updateWebhook(const string& appName, const string& webhookUrl) {
+    if (!this->webhooks.contains(appName)) {
+        cerr<<"webhook doesn't exist"<<endl;
+        return false;
+    }
+
+    string appNameValue = this->webhooks[appName];
+    this->webhooks[appName] = webhookUrl;
+
+    if (!this->overwriteConfigFile()) {
+        this->webhooks[appName] = appNameValue;
         return false;
     }
 
     return true;
 }
 
-bool ConfigManager::changeSelectedWebhook(string appName, string webhookUrl) {
-    if (this->webhooks.find(appName) == this->webhooks.end()) {
-        cerr<<"webhook doesn't exist"<<endl;
-        return false;
+void ConfigManager::readConfig(int argc, char* argv[]) {
+    // Basic safety check for command existence
+    if (argc < 3) {
+        cerr << "No command provided. Use \"config help\" for valid commands." << endl;
+        return;
     }
 
-    this->temporaryModifiedWebhooks[appName] = this->webhooks[appName];
+    const string command = argv[2];
+    bool validCommand = false;
 
-    this->webhooks[appName] = webhookUrl;
-
-    if (!this->overwriteConfigFile()) {
-        this->webhooks[appName] = this->temporaryModifiedWebhooks[appName];
-        return false;
+    // 1. ADD
+    if (command == "add") {
+        validCommand = true;
+        if (argc == 5) {
+            this->addWebhook(argv[3], argv[4]);
+            return;
+        }
+    }
+    // 2. REMOVE
+    else if (command == "remove") {
+        validCommand = true;
+        if (argc == 4) {
+            this->removeWebhook(argv[3]);
+            return;
+        }
+    }
+    // 3. UPDATE
+    else if (command == "update") {
+        validCommand = true;
+        if (argc == 5) {
+            this->updateWebhook(argv[3], argv[4]);
+            return;
+        }
+    }
+    // 4. SELECT
+    else if (command == "select") {
+        validCommand = true;
+        if (argc == 4) {
+            this->selectWebhook(argv[3]);
+            return;
+        }
+    }
+    // 5. DESELECT
+    else if (command == "deselect") {
+        validCommand = true;
+        if (argc == 4) {
+            this->deselectWebhook(argv[3]);
+            return;
+        }
+    }
+    // 6. LIST SELECTED
+    else if (command == "list-selected") {
+        validCommand = true;
+        this->listSelectedWebhooks();
+        return;
+    }
+    // 7. PRINT ALL
+    else if (command == "print-all") {
+        validCommand = true;
+        cout << *this; // Uses your overloaded ostream operator
+        return;
+    }
+    // 8. HELP
+    else if (command == "help") {
+        this->printHelp();
+        return;
     }
 
-    return true;
+    // Error Handling
+    if (validCommand) {
+        cerr << "Invalid parameters for " << command << ". Use \"config help\" to list inputs." << endl;
+    } else {
+        cerr << "Command not found. Use \"config help\" for valid commands." << endl;
+    }
 }
 
 ostream& operator<<(ostream& out, const ConfigManager& configManager) {
@@ -99,4 +202,60 @@ ostream& operator<<(ostream& out, const ConfigManager& configManager) {
         out<<webhook.first<<"="<<webhook.second<<endl;
     }
     return out;
+}
+
+void ConfigManager::printHelp() const {
+    cout << "\n--- Dispatch Config Help ---" << endl;
+    cout << "Usage: dispatch config <command> [arguments]" << endl;
+    cout << "\nCommands:" << endl;
+    cout << "  add <name> <url>       Save a new webhook." << endl;
+    cout << "  remove <name>          Delete a webhook by name." << endl;
+    cout << "  update <name> <url>    Update the URL for an existing name." << endl;
+    cout << "  select <name>          Mark a webhook as active (will receive posts)." << endl;
+    cout << "  deselect <name>        Stop sending posts to a specific webhook." << endl;
+    cout << "  list-selected          Show all webhooks currently marked with '*'." << endl;
+    cout << "  print-all              Show every webhook saved in your config." << endl;
+    cout << "  help                   Display this menu." << endl;
+    cout << "----------------------------\n" << endl;
+}
+
+bool ConfigManager::selectWebhook(const string &appName) {
+    if (!this->webhooks.contains(appName)) {
+        cerr<<"webhook"<<appName<<" doesn't exist"<<endl;
+        return false;
+    }
+    this->selectedWebhooks[appName] = this->webhooks[appName];
+    string appNameValue = this->webhooks[appName];
+    if (!this->overwriteConfigFile()) {
+        this->webhooks[appName] = appNameValue;
+        return false;
+    }
+
+    return true;
+}
+
+bool ConfigManager::deselectWebhook(const string &appName) {
+
+    if (!this->webhooks.contains(appName)) {
+        cerr<<"webhook"<<appName<<" doesn't exist"<<endl;
+        return false;
+    }
+    this->selectedWebhooks.erase(appName);
+    string appNameValue = this->webhooks[appName];
+    if (!this->overwriteConfigFile()) {
+        this->webhooks[appName] = appNameValue;
+        return false;
+    }
+
+    return true;
+}
+
+void ConfigManager::listSelectedWebhooks() const {
+    for (const auto& webhook : this->selectedWebhooks) {
+        cout<<webhook.first<<"="<<webhook.second<<endl;
+    }
+}
+
+map<string,string> ConfigManager::getSelectedWebhooks() const {
+    return this->selectedWebhooks;
 }
