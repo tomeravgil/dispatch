@@ -8,20 +8,24 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install dependencies (Ubuntu)
+      if: runner.os == 'Linux'
       run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev cmake
 
     - name: Configure CMake
       run: cmake -B ${{github.workspace}}/build
 
-    - name: Build tests
+    - name: Build all targets
       working-directory: ${{github.workspace}}/build
-      run: make dispatch_test
+      run: make
 
     - name: Run tests
       working-directory: ${{github.workspace}}/build
